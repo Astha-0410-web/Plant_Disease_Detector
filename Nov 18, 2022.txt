@@ -1,0 +1,94 @@
+Just Don't Remove Anything. Its hard to get code so pls don't remove it. This took 2 days to create it now i am stuck 
+
+
+import os
+from PIL import Image
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.runnables import RunnablePassthrough, RunnableLambda
+import google.generativeai as genai
+
+os.environ['GOOGLE_API_KEY'] = API_KEY
+genai.configure(api_key=os.environ['GOOGLE_API_KEY'])
+
+# Define the language model
+llm = ChatGoogleGenerativeAI(
+    model="models/gemini-1.5-pro-002",
+    generation_config=genai.GenerationConfig(
+        temperature=1
+    )
+)
+
+# State class to track previous interactions
+class State:
+    def __init__(self):
+        self.previous_data = []
+
+    def update(self, result, question):
+        # Save question and result as a dict to track context
+        self.previous_data.append({'question': question, 'answer': result})
+
+state = State()
+
+# Define the prompt template
+template = """You are a UI/UX chatbot. I will ask you questions. Please provide detailed and accurate answers. If you don't know the answer, don't give a response.
+Context: {context}
+Question: {question}
+Answer based on the context provided.
+"""
+
+# Retrieve the previous context from the state
+def retrieve_context(_):
+    context_str = "\n".join([f"Q: {entry['question']} A: {entry['answer']}" for entry in state.previous_data])
+    return context_str if context_str else "No previous context."
+
+retriever = RunnableLambda(retrieve_context)
+
+# Retrieval chain logic
+retrieval_chain = (
+    {"context": retriever, "question": RunnablePassthrough()}
+    | ChatPromptTemplate.from_template(template)
+    | llm
+    | StrOutputParser()
+)
+
+def analyze_image(question, image_path):
+    # Upload the file to Google Generative AI
+    uploaded_file = genai.upload_file(path=image_path, display_name="Image for UI analysis")
+    model = genai.GenerativeModel('models/gemini-1.5-pro-002')
+    response = model.generate_content([question,uploaded_file])
+    return response.text
+
+def get_result(question):
+    # Determine if question involves an image
+    if isinstance(question, list) and len(question) == 2 and isinstance(question[1], str):
+        question_text = question[0]  # Text question
+        image_path = question[1]  # Image path
+
+        # Analyze image if present
+        image_analysis = analyze_image(question_text, image_path)
+        question_text += f"\nImage analysis result: {image_analysis}"  # Add image analysis to question
+    else:
+        question_text = question
+
+    # Retrieve the previous context
+    context = retrieve_context(None)
+
+    # Pass the context and question into the retrieval chain
+    output = retrieval_chain.invoke({
+        "context": context,
+        "question": question_text,
+    })
+
+    # Update the state with the new question and answer
+    state.update(result=output, question=question_text)
+
+    return output
+
+# Example usage
+if __name__ == "__main__":
+    img_path = "/content/tcules.png"  # Path to the image
+    question = "What UI elements are present in this image?"
+    result = get_result([question, img_path])
+    print(result)
